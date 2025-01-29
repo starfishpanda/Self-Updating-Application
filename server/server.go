@@ -17,7 +17,7 @@ type UpdateResponse struct {
 }
 
 // Server constants that populate the response
-const (
+var (
 	latestVersion string = "1.1.2"
 	binaryName    string = "myapp-update"
 	port          string = ":8080"
@@ -53,14 +53,18 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	fileName := r.URL.Query().Get("file")
 
-	wd, err := os.Getwd()
+	exePath, err := os.Executable()
+	log.Printf("Exepath: %v", exePath)
 	if err != nil {
+		log.Printf("Error getting executable path: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	exeDir := filepath.Dir(exePath)
+	binariesDir := filepath.Join(exeDir, "binaries")
 	// Sanitize file name from client request
 	sanitizeFileName := filepath.Clean(fileName)
-	binaryPath := filepath.Join(wd, "binaries", sanitizeFileName)
+	binaryPath := filepath.Join(binariesDir, sanitizeFileName)
 
 	log.Printf("Requested file: %s", sanitizeFileName)
 	log.Printf("Serving file from path: %s", binaryPath)
