@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -21,6 +24,7 @@ var (
 type UpdateResponse struct {
 	UpdateVersion string `json:"updateVersion"`
 	DownloadLink  string `json:"downloadLink"`
+	Checksum      string `json:"Checksum"`
 }
 
 func main() {
@@ -31,11 +35,7 @@ func main() {
 	// Check if updated version exists ever 4 seconds
 	go func() {
 		for {
-			upToDate := checkUpdate()
-			if upToDate {
-				log.Printf("Application running. Press Ctrl+C to exit.")
-				log.Printf("Application up-to-date. Running version: %s", currentVersion)
-			}
+			checkUpdate()
 			time.Sleep(4 * time.Second)
 		}
 	}()
@@ -45,141 +45,123 @@ func main() {
 	os.Exit(0)
 }
 
-// Check update version
-func checkUpdate() bool {
+func checkUpdate() {
 	log.Printf("Checking for updates...")
 
 	// GET check for updates
 	resp, err := http.Get(checkUpdateUrl)
 	if err != nil {
 		log.Printf("Update check failed: %v", err)
-		return false
+		return
 	}
 	// Close TCP connection when function exits
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Update check returned status code: %v", resp.StatusCode)
-		return false
+		return
 	}
 
 	var result UpdateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Printf("There was an error decoding JSON: %v", err)
-		return false
+		return
 	}
 
-	// Compare semantic versions
+	// Compare semantic versions of current and Update
 	if result.UpdateVersion == currentVersion {
 		log.Printf("Application running latest version: %s\n", currentVersion)
-		return true
+		return
 	}
-	log.Printf("Downloading latest version...")
-	log.Printf("Update version from result: %s", result.UpdateVersion)
-	log.Printf("Download link: %s", result.DownloadLink)
+	log.Printf("New version available: %s", result.UpdateVersion)
 
-	// Get update temp file path
-	tmpFilePath, err := downloadUpdate(result.DownloadLink)
-
+	// Download update
+	tmpPath, err := downloadUpdate(result.DownloadLink)
 	if err != nil {
-		log.Printf("Failed to download application update: %v", err)
-		return false
+		log.Printf("Failed to download update: %v", err)
+		return
 	}
 
-	log.Printf("Successfully downloaded latest version.")
+	defer os.Remove(tmpPath)
+	log.Printf("Successfully downloaded update.")
 
-	// Clean up any previous temporary files
-	// defer os.Remove(tmpFilePath)
-
-	log.Printf("Renaming executable...")
-
-	exePath, err := os.Executable()
+	// Verify checksum of update
+	isValidChecksum, err := verifyChecksum(tmpPath, result.Checksum)
 	if err != nil {
-		log.Printf("Unable to find current executable: %v", err)
-		return false
-	}
-	backupPath := exePath + ".bak"
-	err = os.Rename(exePath, backupPath)
-	if err != nil {
-		log.Printf("Error occurred while changing executable path: %v", err)
-		return false
-	}
-	log.Printf("Successfully backed up previous version to: %v", backupPath)
-
-	err = os.Rename(tmpFilePath, exePath)
-	if err != nil {
-		log.Printf("Error occurred while changing tmp file path to executable path: %v", err)
-		log.Printf("Rolling back executable to backup")
-		_ = os.Rename(backupPath, exePath)
-		return false
-	}
-	log.Printf("Successfully replaced old binary with update!")
-
-	log.Printf("Attempting to restart updated application...")
-
-	// Restart application with update
-	err = restartApplication(result.UpdateVersion, exePath)
-
-	if err != nil {
-		log.Printf("Unable to restart application at new executable path.")
-		log.Printf("Rolling back executable to backup path.")
-		_ = os.Rename(exePath, tmpFilePath+"_failed")
-		_ = os.Rename(backupPath, exePath)
-
+		log.Printf("Failed to verifyChecksum: %v", err)
+		return
 	}
 
-	log.Printf("Application up-to-date. Running version: %v", result.UpdateVersion)
+	if !isValidChecksum {
+		log.Printf("checksum verification failed: file may be corrupted or tampered with.")
+		return
+	}
+	log.Printf("Successfully verified checksum of update.")
 
-	return true
+	newBinaryPath := filepath.Join("/app/client", "myapp-update")
+	if err := os.Rename(tmpPath, newBinaryPath); err != nil {
+		log.Printf("Failed to move update to binaries: %v", err)
+		return
+	}
+
+	// Ensure update binary is executable
+	if err := os.Chmod(newBinaryPath, 0755); err != nil {
+		log.Printf("failed to set executable permissions: %v", err)
+		return
+	}
+	cmd := exec.Command(newBinaryPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start new version: %v", err)
+		return
+	}
+
+	log.Printf("Successfully started new version: %s", result.UpdateVersion)
+	os.Exit(0)
 }
 
-func downloadUpdate(downloadUrl string) (string, error) {
-	resp, err := http.Get(downloadUrl)
+func downloadUpdate(downloadLink string) (string, error) {
+	resp, err := http.Get(downloadLink)
 	if err != nil {
-		return "", fmt.Errorf("An error occurred getting updated app: %v", err)
+		return "", fmt.Errorf("download failed: %v", err)
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Update file could not be found: %d", resp.StatusCode)
+		return "", fmt.Errorf("download returned status code: %d", resp.StatusCode)
 	}
 
-	tmpFile, err := os.CreateTemp("", "myapp-update-")
+	tmpFile, err := os.CreateTemp("", "myapp-update-*.tmp")
 	if err != nil {
-		return "", fmt.Errorf("An error occurred creating tmp file: %v", err)
+		return "", fmt.Errorf("failed to create temp file: %v", err)
 	}
 
-	_, err = io.Copy(tmpFile, resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("An error occurred copying update to tmp file: %v", err)
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("failed to write update: %v", err)
 	}
+	tmpFile.Close()
 
-	err = tmpFile.Chmod(0755)
-	if err != nil {
-		return "", fmt.Errorf("An error occurred creating tmp file: %v", err)
-	}
-
-	// Return updated file path
 	return tmpFile.Name(), nil
 
 }
 
-func restartApplication(version string, filePath string) error {
-
-	cmd := exec.Command(filePath)
-
-	// Redirect logs of new process to current process
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("An error occurred while restarting the application: %v", err)
+func verifyChecksum(filepath string, expectedChecksum string) (bool, error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file for verification: %v", err)
 	}
-	log.Printf("Application up-to-date. Running version: %v", version)
-	log.Printf("Successfully started new process with PID: %d", cmd.Process.Pid)
-	// End current process to prevent loops
-	os.Exit(0)
 
-	return nil
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return false, fmt.Errorf("failed to calculate checksum: %v", err)
+	}
+
+	actualChecksum := hex.EncodeToString(hash.Sum(nil))
+	return actualChecksum == expectedChecksum, nil
 }

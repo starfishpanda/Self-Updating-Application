@@ -1,19 +1,22 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 )
 
 // Server response type
 type UpdateResponse struct {
 	UpdateVersion string `json:"updateVersion"`
 	DownloadLink  string `json:"downloadLink"`
+	Checksum      string `json:"checkSum"`
 }
 
 // Server constants that populate the response
@@ -36,50 +39,47 @@ func main() {
 
 }
 
+func calculateCheckSum(filepath string) (string, error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file for checksum: %v", err)
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("failed to calculate checksum: %v", err)
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
+
+}
+
 func updateHandler(w http.ResponseWriter, r *http.Request) {
+	// Calculate checksum for update binary
+	binaryPath := filepath.Join("/app/server/binaries", binaryName)
+	checksum, err := calculateCheckSum(binaryPath)
+	if err != nil {
+		log.Printf("Err calculating checksum: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 	// log.Printf("updateHandler triggered")
 	resp := UpdateResponse{
 		UpdateVersion: latestVersion,
 		DownloadLink:  fmt.Sprintf("%s/download?file=%s", baseUrl, binaryName),
+		Checksum:      checksum,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
 	}
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
-	fileName := r.URL.Query().Get("file")
-
-	exePath, err := os.Executable()
-	log.Printf("Exepath: %v", exePath)
-	if err != nil {
-		log.Printf("Error getting executable path: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	exeDir := filepath.Dir(exePath)
-	binariesDir := filepath.Join(exeDir, "binaries")
-	// Sanitize file name from client request
-	sanitizeFileName := filepath.Clean(fileName)
-	binaryPath := filepath.Join(binariesDir, sanitizeFileName)
-
-	log.Printf("Requested file: %s", sanitizeFileName)
-	log.Printf("Serving file from path: %s", binaryPath)
-
-	// Check if file exists
-	fileInfo, err := os.Stat(binaryPath)
-	if err != nil {
-		http.Error(w, "File Not Found", http.StatusNotFound)
-		return
-	}
-
-	// Create content headers for client download
-	w.Header().Set("Content-Disposition", fmt.Sprintf("application; filename=\"%s\"", binaryPath))
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
+	binaryPath := filepath.Join("/app/server/binaries", binaryName)
+	w.Header().Set("Content-Type", "application/json")
 
 	// Send the compiled update at binaryPath
 	http.ServeFile(w, r, binaryPath)
