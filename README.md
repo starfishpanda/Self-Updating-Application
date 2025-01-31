@@ -1,6 +1,6 @@
 # 🚀 Self-Updating Application  
 
-This project demonstrates a self-updating application that works across multiple platforms (Windows, Mac, Linux). It achieves this through Docker containerization and an update mechanism that verifies and applies new versions seamlessly.  
+This project demonstrates a self-updating application that works across multiple platforms (Windows, Mac, Linux). It achieves this through Docker containerization and an update mechanism that verifies and applies new versions seamlessly and authentically.  
 
 
 ## ✅ Features
