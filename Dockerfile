@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.currentVersion=1.1.2" -o client-1.1
 
 FROM alpine:latest
 
-# In case we need ca certs for HTTPS
+# In case I need ca certs for HTTPS
 # RUN apk add --no-cache ca-certificates
 
 # Create directory structure in container
