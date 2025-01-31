@@ -1,8 +1,14 @@
 # 🚀 Self-Updating Application  
 
-This project demonstrates a self-updating application that works across multiple platforms (Windows, Mac, Linux). It achieves this through **Docker containerization** and an update mechanism that verifies and applies new versions seamlessly.  
+This project demonstrates a self-updating application that works across multiple platforms (Windows, Mac, Linux). It achieves this through Docker containerization and an update mechanism that verifies and applies new versions seamlessly.  
 
----
+
+## ✅ Features
+
+- **Digital Signature Verification:** Ensures the authenticity and integrity of the update by using public and private keys, protecting against man-in-the-middle (MITM) attacks.
+- **Checksum Verification:** Validates that the update binary has not been tampered with by checking its SHA-256 hash checksum.
+- **Docker Containerization:** Enables the program to update itself across different operating systems, as it is self-contained with its runtime and dependencies.
+
 
 ## 📌 Prerequisites  
 
@@ -11,7 +17,6 @@ Before running the application, ensure you have the following installed:
 - [Git](https://git-scm.com/downloads)  
 - [Docker](https://www.docker.com/get-started) (installed and running)  
 
----
 
 ## 🛠️ How to Run  
 

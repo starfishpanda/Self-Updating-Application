@@ -22,6 +22,8 @@ COPY server/go.mod ./
 RUN go mod download
 COPY server/ ./
 
+
+
 WORKDIR /build/server/keygen
 RUN go run keygen.go
 WORKDIR /build/server
