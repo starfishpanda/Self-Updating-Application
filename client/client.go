@@ -1,9 +1,13 @@
 package main
 
 import (
+	"crypto"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -19,12 +23,14 @@ import (
 var (
 	currentVersion = "1.1.1"
 	checkUpdateUrl = "http://localhost:8080/checkUpdate"
+	publicKey      *rsa.PublicKey
 )
 
 type UpdateResponse struct {
 	UpdateVersion string `json:"updateVersion"`
 	DownloadLink  string `json:"downloadLink"`
-	Checksum      string `json:"Checksum"`
+	Checksum      string `json:"checksum"`
+	Signature     string `json:"signature"`
 }
 
 func main() {
@@ -43,6 +49,56 @@ func main() {
 	<-stop
 	log.Println("Received interrupt signal. Shutting down gracefully...")
 	os.Exit(0)
+}
+
+func init() {
+	publicKeyPath := filepath.Join("/app/client", "public.pem")
+
+	// Read the public key file
+	publicKeyBytes, err := os.ReadFile(publicKeyPath)
+	if err != nil {
+		log.Fatalf("Failed to read public key from %s: %v", publicKeyPath, err)
+	}
+
+	// Decode the PEM formatted key
+	block, _ := pem.Decode(publicKeyBytes)
+	if block == nil {
+		log.Fatal("Failed to decode PEM block containing public key")
+	}
+
+	// Parse the key into our publicKey variable
+	var err2 error
+	publicKey, err2 = x509.ParsePKCS1PublicKey(block.Bytes)
+	if err2 != nil {
+		log.Fatalf("Failed to parse public key: %v", err2)
+	}
+
+	log.Printf("Successfully loaded public key from %s", publicKeyPath)
+
+}
+
+func verifySignature(filepath string, signature string) (bool, error) {
+	// Calculate the hash of the downloaded binary
+	hash := sha256.New()
+	file, err := os.Open(filepath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file for verification: %v", err)
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(hash, file); err != nil {
+		return false, fmt.Errorf("failed to calculate hash: %v", err)
+	}
+
+	// Decode the hex-encoded signature to bytes
+	signatureBytes, err := hex.DecodeString(signature)
+	if err != nil {
+		return false, fmt.Errorf("failed to decode signature: %v", err)
+	}
+
+	// Verify the signature using public key
+	err = rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hash.Sum(nil), signatureBytes)
+	return err == nil, err
 }
 
 func checkUpdate() {
@@ -84,6 +140,18 @@ func checkUpdate() {
 
 	defer os.Remove(tmpPath)
 	log.Printf("Successfully downloaded update.")
+
+	isValidSignature, err := verifySignature(tmpPath, result.Signature)
+	if err != nil {
+		log.Printf("Failed to verify signature: %v", err)
+		return
+	}
+
+	if !isValidSignature {
+		log.Printf("Invalid signature: binary may be tampered with")
+		return
+	}
+	log.Printf("Successfully verified binary signature")
 
 	// Verify checksum of update
 	isValidChecksum, err := verifyChecksum(tmpPath, result.Checksum)
