@@ -1,72 +1,3 @@
-# FROM golang:1.21-alpine AS builder
-
-# RUN apk add --no-cache git
-
-# WORKDIR /build
-
-# #Build and run Keygen utility
-# WORKDIR /build/keygen
-# COPY server/keygen/keygen.go .
-# RUN go build -o keygen && ./keygen
-
-# # Build Server
-# WORKDIR /build/server
-# COPY server/go.mod server/go.sum* ./
-# COPY server/server.go .
-# RUN CGO_ENABLED=0 go build -o server
-
-# # Build current and update version of client
-# WORKDIR /build/client
-# COPY client/go.mod client/go.sum* ./
-# COPY client/client.go .
-
-# #Build version 1.1.1
-# RUN CGO_ENABLED=0 go build -ldflags "-X main.currentVersion=1.1.1" -o client-1.1.1
-# #Build update version 1.1.2
-# RUN CGO_ENABLED=0 go build -ldflags "-X main.currentVersion=1.1.2" -o client-1.1.2
-
-# FROM alpine:latest
-
-# # Create directory structure in container
-# WORKDIR /app
-# RUN mkdir -p server/binaries client && \
-#   chown -R nobody:nobody /app && \
-#   chmod -R 755 /app
-
-# # Copy server binary from build
-# COPY --from=builder /build/server/server ./server/
-
-# # Copy server binary and private key from build
-# COPY --from=builder /build/keygen/private.pem ./server/
-# COPY --from=builder /build/keygen/public.pem ./client/
-
-
-# # Copy client and update binaries from build
-# COPY --from=builder /build/client/client-1.1.1 ./client/client
-# COPY --from=builder /build/client/client-1.1.2 ./server/binaries/myapp-update
-
-# # Make start script and binaries executable
-# COPY start.sh /app/start.sh
-
-# RUN chmod +x /app/start.sh && \
-#   chmod +x /app/server/server && \
-#   chmod +x /app/client/client && \
-#   chmod +x /app/server/binaries/myapp-update \
-#   # Set restrictive permissions for private key
-#   chmod 600 ./server/private.pem && \
-#   # Set read-only permissions for public key
-#   chmod 644 ./client/public.pem && \
-#   # Ensure nobody user can still access everything needed
-#   chown -R nobody:nobody /app
-
-# USER nobody
-
-# WORKDIR /app
-# CMD ["./start.sh"]
-
-# ┌─────────────────────────────────────────┐
-# │    Stage 1: Builder (Go + Alpine)      │
-# └─────────────────────────────────────────┘
 FROM golang:1.20-alpine AS builder
 
 RUN go version
@@ -85,9 +16,7 @@ ENV GO111MODULE=on
 WORKDIR /build
 RUN go mod init build
 
-# ──────────────────────────────────────────
-# Build the Server + Keygen
-# ──────────────────────────────────────────
+# Build the Server and run Keygen
 WORKDIR /build/server
 COPY server/go.mod ./
 RUN go mod download
@@ -97,33 +26,19 @@ WORKDIR /build/server/keygen
 RUN go run keygen.go
 WORKDIR /build/server
 
-# 4) Build the server binary
+
 RUN go build -o server .
 
-# ──────────────────────────────────────────
 # Build the Client
-# ──────────────────────────────────────────
 WORKDIR /build/client
-
-# # 1) Copy client go.mod/go.sum, then download deps
-# COPY client/go.mod ./
-# RUN go mod download
-
-# 2) Copy all client files
 COPY client/ ./
-
-# RUN go mod tidy
 RUN go list -m all
-
 RUN go env && ls -la /usr/local/go/src/crypto
 
 # 3) Build two client versions
 RUN go build -v -ldflags "-X main.currentVersion=1.1.1" -o client-1.1.1
 RUN go build -v -ldflags "-X main.currentVersion=1.1.2" -o client-1.1.2
 
-# ┌─────────────────────────────────────────┐
-# │     Stage 2: Final minimal image       │
-# └─────────────────────────────────────────┘
 FROM alpine:latest
 
 # Create directory structure in container
